@@ -6,9 +6,12 @@ Created on 2024(e)ko api. 4(a)
 import mariadb
 import sys
 from PyP100 import PyP100
-from _datetime import timedelta, datetime
+import datetime
+from _datetime import timedelta
 
 if __name__ == '__main__':
+    now = datetime.datetime.now()
+    print("Se ejecuta beerFermControl a las:", now)
     # Connect to MariaDB Platform
     try:
         conn = mariadb.connect(
@@ -24,21 +27,20 @@ if __name__ == '__main__':
     
     # Get Cursor and execute select
     cur = conn.cursor()
-    cur.execute("SELECT MOMENT, HYDROM_NAME, GRAVITY, TEMP FROM READING ORDER BY MOMENT DESC FETCH FIRST 1 ROWS ONLY")
+    cur.execute("SELECT MOMENT, HYDROM_NAME, GRAVITY, TEMP FROM READING ORDER BY MOMENT DESC LIMIT 1")
     lecturas = cur.fetchall()
     moment, hydromname, gravity, temp = lecturas[0][0], lecturas[0][1], lecturas[0][2], lecturas[0][3]
-    now = datetime.utcnow()
-    if (now - datetime.utcfromtimestamp(moment)) < timedelta(minutes=10):
+    if (now - moment) < timedelta(minutes=10):
         # Hay una lectura de hace menos de 10 minutos
         cur.execute("SELECT CONFIG_ID FROM HYDROM WHERE NAME = ?", (hydromname,))
         hydroms = cur.fetchall()
         for hydrom in hydroms:
             # Analizamos cada configuración con ese nombre de hydrom
             configid = hydrom[0]
-            cur.execute("SELECT TOLERANCE, START_DATE, END_DATE FROM CONFIG WHERE T1.ID = ? ", (configid,))
+            cur.execute("SELECT TOLERANCE, START_DATE, END_DATE FROM CONFIG WHERE ID = ? ", (configid,))
             config = cur.fetchall()[0]
             tolerance, startdate, enddate,= config[0], config[1], config[2]
-            if datetime.utcfromtimestamp(startdate) < now and datetime.utcfromtimestamp(enddate) > now:
+            if (not startdate > now.date()) and (not enddate < now.date()):
                 # Esta configuración está activa
                 cur.execute("SELECT AIMED_TEMP FROM TEMPRANGE WHERE CONFIG_ID = ? AND TOP_GRAVITY >= ? AND BOTTOM_GRAVITY < ?", (configid, gravity, gravity,))
                 aimedtemp = cur.fetchall()[0][0]
@@ -50,15 +52,18 @@ if __name__ == '__main__':
                 calefactor = PyP100.P100(datoscale[0], datoscale[1], datoscale[2])
                 if temp > (aimedtemp + tolerance):
                     # Hay que enfriar el mosto!
+                    print("Hay que enfriar el mosto!")
                     congelador.turnOn()
                     calefactor.turnOff()
                     cur.execute("INSERT INTO ULOG (MOMENT, CONFIG_ID, EVENT) VALUES (CURRENT_TIMESTAMP, ?, ?)", (configid, "WARM TURNED OFF AND COLD TURNED ON",))
                 elif temp < (aimedtemp - tolerance):
                     # Hay que calentar el mosto!
+                    print("Hay que calentar el mosto!")
                     congelador.turnOff()
                     calefactor.turnOn()
                     cur.execute("INSERT INTO ULOG (MOMENT, CONFIG_ID, EVENT) VALUES (CURRENT_TIMESTAMP, ?, ?)", (configid, "WARM TURNED ON AND COLD TURNED OFF",))
                 else:
+                    print("No hay que hacer nada!")
                     cur.execute("INSERT INTO ULOG (MOMENT, CONFIG_ID, EVENT) VALUES (CURRENT_TIMESTAMP, ?, ?)", (configid, "WE ARE OK, NO TEMPERATURE CHANGE NEEDED",))
                 conn.commit()
     # Cerramos la conexion
